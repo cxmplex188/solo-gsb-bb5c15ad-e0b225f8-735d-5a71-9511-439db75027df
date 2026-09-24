@@ -426,12 +426,12 @@ class TestAPI(unittest.TestCase):
             self.assertEqual(c["a_leads"] + c["b_leads"] + c["ties"], 1)
 
     def test_22_judge_disagreement_in_analysis(self):
-        # JA/JB 同向；JA/JC 逆向；JB 与 JC 同向（C3,C4 上）。
+        # JA/JB 同向；JA/JC 仅 C1↔C2 一对逆向（JC 给 C2 最高分、C1 次高）。
         csv_body = (
             "选手,评委,项目,分数\n"
             "C1,JA,P1,8.30\nC2,JA,P1,8.00\nC3,JA,P1,7.90\nC4,JA,P1,7.80\n"
             "C1,JB,P1,8.30\nC2,JB,P1,8.00\nC3,JB,P1,7.85\nC4,JB,P1,7.75\n"
-            "C1,JC,P1,5.0\nC2,JC,P1,9.5\nC3,JC,P1,7.2\nC4,JC,P1,6.8\n"
+            "C1,JC,P1,8.0\nC2,JC,P1,9.5\nC3,JC,P1,7.2\nC4,JC,P1,6.8\n"
         )
         r = client.post(
             f"/api/sessions/{SID}/upload?scope=judge",

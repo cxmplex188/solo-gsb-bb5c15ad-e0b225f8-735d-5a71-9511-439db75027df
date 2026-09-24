@@ -21,6 +21,11 @@ let compareReqId = 0; // 丢弃过期的对比响应
 let ruleDraft = null; // 规则编辑器草稿（数组），DOM 是输入中的真实来源
 let rulePreviewData = null; // 最近一次规则预览结果（只读，不落库）
 let rulePreviewStale = false; // 草稿在预览后又被修改
+let backfillData = null; // 补评分派最近一次只读预览（不写入评分或裁决）
+let backfillStale = false; // 预览参数在出结果后又被修改
+let backfillCaps = {}; // 各评委本轮可接任务数（草稿，按评委名持久）
+let backfillJudgeKey = ""; // 当前容量输入表对应的评委有序集合
+let backfillSig = ""; // 最近一次预览所基于的原始评分签名，用于识别数据变化
 
 const $ = (sel) => document.querySelector(sel);
 const dashboard = $("#dashboard");
@@ -70,10 +75,29 @@ function render() {
     emptyState.hidden = false;
     compareReqId += 1;
     compareData = null;
+    backfillData = null;
+    backfillStale = false;
+    backfillSig = "";
+    setBackfillMsg("");
+    renderBackfillPanel();
     return;
   }
   emptyState.hidden = true;
   dashboard.hidden = false;
+
+  // 原始评分发生变化（上传/合并/载入示例）时，补评分派预览自动失效。
+  const sig = backfillSignature(analysis);
+  if (backfillData && sig !== backfillSig) {
+    backfillData = null;
+    backfillStale = false;
+    setBackfillMsg("原始评分已变化，请重新生成分派预览。", "error");
+  }
+  backfillSig = sig;
+  // 方案本身与校准范围无关，但横幅里的范围标签要随当前范围同步。
+  if (backfillData) {
+    backfillData.scope = analysis.scope;
+    backfillData.scope_label = analysis.scope_label;
+  }
 
   const ref = analysis.reference;
   $("#reference-info").innerHTML =
@@ -97,6 +121,7 @@ function render() {
   renderDetails();
   renderStability();
   refreshCompare();
+  renderBackfillPanel();
 }
 
 // ---------- Ranking stability experiment ----------
@@ -945,6 +970,218 @@ $("#btn-rule-clear").addEventListener("click", async () => {
     setRulesMsg(err.message, "error");
     toast("清空规则失败：" + err.message, true);
   }
+});
+
+// ---------- Supplementary scoring assignment (read-only preview) ----------
+const backfillTargetInput = $("#backfill-target");
+const backfillCapsEl = $("#backfill-caps");
+const backfillResultEl = $("#backfill-result");
+const backfillRunBtn = $("#btn-backfill-run");
+const backfillClearBtn = $("#btn-backfill-clear");
+
+function setBackfillMsg(text, cls = "") {
+  const el = $("#backfill-msg");
+  if (el) {
+    el.textContent = text;
+    el.className = "msg " + cls;
+  }
+}
+
+// 原始评分签名：只看评委/选手/项目的存在与打分事实（分数值变化也重算预览，
+// 因为它可能影响会话内容；补评分派实际只依赖打分事实）。
+function backfillSignature(a) {
+  const triples = [];
+  for (const b of a.contestants) {
+    for (const ib of b.items) {
+      for (const s of ib.scores) triples.push(`${b.contestant}|${s.judge}|${ib.item}`);
+    }
+  }
+  triples.sort();
+  return triples.join("#");
+}
+
+// 容量输入表只在评委集合变化时整体重建；重建会保留旧评委已填的容量。
+function renderBackfillCaps() {
+  if (!analysis || analysis.counts.scores === 0) {
+    backfillCapsEl.innerHTML = "";
+    backfillRunBtn.disabled = true;
+    backfillTargetInput.disabled = true;
+    return;
+  }
+  backfillRunBtn.disabled = false;
+  backfillTargetInput.disabled = false;
+  const key = analysis.judges.join("|");
+  if (key === backfillJudgeKey) return;
+  backfillJudgeKey = key;
+  const rows = analysis.judges.map((j, i) => {
+    const val = backfillCaps[j] !== undefined ? backfillCaps[j] : 0;
+    return `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${esc(j)}</td>
+        <td class="num"><input type="number" class="bf-cap-input" data-judge="${esc(j)}"
+          min="0" max="1000000" step="1" value="${Number(val)}"></td>
+      </tr>`;
+  }).join("");
+  backfillCapsEl.innerHTML = `
+    <p class="hint" style="margin-bottom:6px;">各评委本轮可接任务数（留空或 0 表示本轮不接单；仅可接「已评过该项目、未评该单元」的任务）：</p>
+    <div class="table-wrap"><table>
+      <tr><th class="num">#</th><th>评委</th><th class="num">本轮可接任务数</th></tr>
+      ${rows}
+    </table></div>`;
+  backfillCapsEl.querySelectorAll(".bf-cap-input").forEach((input) => {
+    input.addEventListener("input", (ev) => {
+      backfillCaps[ev.target.dataset.judge] = ev.target.value === "" ? 0 : Number(ev.target.value);
+      markBackfillStale();
+    });
+  });
+}
+
+// 预览生成后再改参数 → 标记结果过期（不自动重算）。
+function markBackfillStale() {
+  if (backfillData && !backfillStale) {
+    backfillStale = true;
+    renderBackfillResult();
+  }
+}
+backfillTargetInput.addEventListener("input", markBackfillStale);
+
+function collectBackfillCaps() {
+  const caps = {};
+  for (const j of analysis.judges) {
+    caps[j] = backfillCaps[j] !== undefined ? Number(backfillCaps[j]) || 0 : 0;
+  }
+  return caps;
+}
+
+function renderBackfillPanel() {
+  renderBackfillCaps();
+  backfillClearBtn.disabled = !backfillData;
+  renderBackfillResult();
+}
+
+function renderBackfillResult() {
+  if (!backfillData) {
+    backfillResultEl.innerHTML = "";
+    return;
+  }
+  const p = backfillData;
+  const s = p.summary;
+  const banner = `
+    <div class="bf-banner">
+      补评分派预览（校准范围：<b>${esc(p.scope_label)}</b>，只读，<b>不写入评分或裁决</b>）｜
+      每单元目标 <b>${p.target}</b> 位评委：需求单元 <b>${s.units}</b> 个，其中有缺口的单元
+      <b>${s.gap_units}</b> 个（全部缺口 <b>${s.total_gap}</b> 个任务）；
+      评委容量合计 <b>${s.capacity_total}</b>，有资格的「评委×单元」候选 <b>${s.eligible_edges}</b> 个。<br>
+      最优分派 <b class="bf-assigned">${s.assigned_total}</b> 个任务
+      （${s.fully_met_units} 个单元全部补足），未满足 <b class="bf-unmet">${s.unmet_total}</b> 个；
+      候选存在多个最优并列方案时，结果按固定的「评委 → 项目 → 选手」次序稳定选取。
+      ${backfillStale ? '<span class="bf-stale">⚠ 参数在上次预览后已修改，以下结果已过期，请重新生成。</span>'
+        : '<span class="bf-note">预览仅展示任务分派，不会创建评分或裁决。</span>'}
+    </div>`;
+
+  // 评委容量使用情况。
+  const judgeRows = p.judges.map((j) => {
+    const full = j.remaining <= 0 && j.capacity > 0;
+    return `
+      <tr${full ? ' class="bf-met-row"' : ""}>
+        <td>${esc(j.judge)}</td>
+        <td class="num">${j.capacity}</td>
+        <td class="num"><b class="bf-assigned">${j.assigned}</b></td>
+        <td class="num">${j.remaining}</td>
+      </tr>`;
+  }).join("");
+  const judgeTable = `
+    <h3 class="sub">各评委任务分配（容量 / 已派 / 剩余）</h3>
+    <div class="table-wrap"><table>
+      <tr><th>评委</th><th class="num">可接任务数</th><th class="num">本轮已派</th><th class="num">剩余</th></tr>
+      ${judgeRows}
+    </table></div>`;
+
+  // 逐条分派：评委 → 选手 → 项目（assignments 已由服务端固定排序）。
+  const assignRows = p.assignments.map((a) => `
+      <tr>
+        <td>${esc(a.judge)}</td>
+        <td>${esc(a.contestant)}</td>
+        <td>${esc(a.item)}</td>
+      </tr>`).join("");
+  const assignTable = `
+    <h3 class="sub">分派任务明细（共 ${p.assignments.length} 条，按评委 → 选手 → 项目）</h3>
+    <div class="table-wrap bf-table-wrap"><table>
+      <tr><th>评委</th><th>选手</th><th>项目</th></tr>
+      ${assignRows || '<tr><td colspan="3" class="no-reversal">在当前容量与缺口约束下没有可分派的任务。</td></tr>'}
+    </table></div>`;
+
+  // 单元汇总：仅展示有缺口的单元（按项目 → 选手固定次序），逐条给出未满足数量。
+  const gapUnits = p.units.filter((u) => u.gap > 0);
+  const unitRows = gapUnits.map((u) => `
+      <tr class="${u.unmet > 0 ? "bf-unmet-row" : "bf-met-row"}">
+        <td>${esc(u.item)}</td>
+        <td>${esc(u.contestant)}</td>
+        <td class="num">${u.existing}</td>
+        <td class="num">${u.target}</td>
+        <td class="num">${u.gap}</td>
+        <td class="num"><b class="bf-assigned">${u.assigned}</b></td>
+        <td class="num"><b class="${u.unmet > 0 ? "bf-unmet" : "delta-flat"}">${u.unmet}</b></td>
+        <td class="num">${u.eligible_count}</td>
+        <td class="bf-elig">${u.eligible_judges.length ? u.eligible_judges.map(esc).join("、") : "（无合格评委）"}</td>
+      </tr>`).join("");
+  const unitTable = `
+    <h3 class="sub">各单元缺口汇总（仅列有缺口的 ${gapUnits.length} 个；按项目 → 选手）</h3>
+    <div class="table-wrap bf-table-wrap"><table>
+      <tr><th>项目</th><th>选手</th><th class="num">已有<br>评分数</th><th class="num">目标</th>
+      <th class="num">缺口</th><th class="num">本轮<br>分派</th><th class="num">未满足</th>
+      <th class="num">合格<br>评委数</th><th>可接该单元的评委</th></tr>
+      ${unitRows || '<tr><td colspan="9" class="no-reversal">所有需求单元都已达到目标人数。</td></tr>'}
+    </table></div>`;
+
+  backfillResultEl.innerHTML = banner + judgeTable + assignTable + unitTable;
+}
+
+backfillRunBtn.addEventListener("click", async () => {
+  if (!analysis || analysis.counts.scores === 0) return;
+  const target = Number(backfillTargetInput.value);
+  if (!Number.isInteger(target) || target < 1) {
+    setBackfillMsg("每单元目标评委人数必须是不小于 1 的整数。", "error");
+    toast("请填写有效的目标评委人数", true);
+    return;
+  }
+  const caps = collectBackfillCaps();
+  for (const [j, v] of Object.entries(caps)) {
+    if (!Number.isInteger(v) || v < 0) {
+      setBackfillMsg(`评委「${j}」的可接任务数必须是非负整数。`, "error");
+      toast("评委容量必须是非负整数", true);
+      return;
+    }
+  }
+  setBackfillMsg("正在计算最大分派方案…");
+  try {
+    backfillData = await api(`/api/sessions/${SESSION_ID}/backfill/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target, capacities: caps }),
+    });
+    backfillStale = false;
+    backfillSig = backfillSignature(analysis);
+    renderBackfillPanel();
+    const s = backfillData.summary;
+    setBackfillMsg(
+      `预览完成：最优分派 ${s.assigned_total} 个任务，未满足 ${s.unmet_total} 个（未写入任何数据）。`,
+      "ok",
+    );
+  } catch (err) {
+    backfillData = null;
+    renderBackfillPanel();
+    setBackfillMsg(err.message, "error");
+    toast("生成补评分派预览失败：" + err.message, true);
+  }
+});
+
+backfillClearBtn.addEventListener("click", () => {
+  backfillData = null;
+  backfillStale = false;
+  renderBackfillPanel();
+  setBackfillMsg("已清除预览，数据未做任何改动。", "ok");
 });
 
 // ---------- Decision updates ----------

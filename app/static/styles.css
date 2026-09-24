@@ -466,3 +466,43 @@ tr.dg-detail-row td { background: #fbfcfe; padding: 10px 14px; }
 .dg-pref-a { color: var(--green); font-size: 12px; white-space: nowrap; }
 .dg-pref-b { color: var(--red); font-size: 12px; white-space: nowrap; }
 .dg-foot { margin-top: 8px; margin-bottom: 0; }
+
+/* ---------- Supplementary scoring assignment (read-only) ---------- */
+.backfill-controls .bf-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.backfill-controls .bf-target input { width: 90px; }
+.bf-caps { margin: 10px 0 4px; }
+.bf-caps table { max-width: 720px; }
+.bf-caps th, .bf-caps td { white-space: nowrap; }
+.bf-caps input {
+  width: 84px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.bf-caps input:focus { outline: 2px solid #c9d9ff; border-color: var(--primary); }
+.backfill-result { margin-top: 14px; }
+.bf-banner {
+  background: #f5f8ff;
+  border: 1px solid #dbe6ff;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #33455f;
+  margin-bottom: 10px;
+}
+.bf-banner .bf-note { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.bf-banner .bf-stale { display: block; margin-top: 4px; color: var(--red); font-weight: 600; }
+.bf-assigned { color: var(--green); }
+.bf-unmet { color: var(--red); }
+.bf-table-wrap th { white-space: normal; font-size: 12px; line-height: 1.3; }
+tr.bf-unmet-row td { background: #fdf3f3; }
+tr.bf-met-row td { background: #f4faf6; }
+.bf-elig { color: var(--muted); font-size: 12px; }

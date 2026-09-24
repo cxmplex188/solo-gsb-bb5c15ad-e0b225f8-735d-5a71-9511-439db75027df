@@ -150,9 +150,31 @@
       <div id="stability-result" class="stability-result"></div>
     </section>
 
-    <!-- 8. 逐项裁决 -->
+    <!-- 8. 补评分派 -->
     <section class="card">
-      <h2>⑧ 逐项评分裁决</h2>
+      <h2>⑧ 补评分派（只读预览）</h2>
+      <p class="hint">
+        以当前会话中<b>已有评分</b>的「选手 × 项目」组合为<b>需求单元</b>，统一设定每个单元的<b>目标评委人数</b>，
+        并分别设定<b>各评委本轮可接任务数</b>。只有<b>已给该项目打过分（任意选手）、但尚未给该单元打分</b>的评委才能接该单元；
+        扣除已有评分后，在评委容量与每单元缺口约束下，求<b>分派任务总数最大</b>的方案，
+        并按固定的「评委 → 项目 → 选手」顺序稳定输出并列结果。
+        本面板<b>只读：不写入评分或裁决</b>，仅预览任务分派与各单元未满足数量。
+      </p>
+      <div class="toolbar backfill-controls">
+        <label class="bf-target">每单元目标评委人数
+          <input type="number" id="backfill-target" class="select" min="1" max="1000000" step="1" value="3">
+        </label>
+        <button id="btn-backfill-run" class="btn btn-primary">生成分派预览</button>
+        <button id="btn-backfill-clear" class="btn btn-ghost-card" disabled>清除预览</button>
+        <span id="backfill-msg" class="msg"></span>
+      </div>
+      <div id="backfill-caps" class="bf-caps"></div>
+      <div id="backfill-result" class="backfill-result"></div>
+    </section>
+
+    <!-- 9. 逐项裁决 -->
+    <section class="card">
+      <h2>⑨ 逐项评分裁决</h2>
       <p class="hint">对每条原始评分选择「采用校准分」或「保留原分」并填写理由，排名将实时重算。</p>
       <div id="detail-panel"></div>
     </section>

@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import database as db
+from .backfill import BackfillValidationError, plan_backfill
 from .csv_io import CSVParseError, build_audit_csv, parse_scores
 from .merge import (
     STATUS_LABELS as MERGE_STATUS_LABELS,
@@ -79,6 +80,13 @@ class DecisionBody(BaseModel):
 class StabilityBody(BaseModel):
     exclude_type: Literal["judge", "item"]
     exclude_name: str = Field(min_length=1, max_length=200)
+
+
+class BackfillBody(BaseModel):
+    # 每个需求单元（已有评分的选手×项目）统一的目标评委人数。
+    target: int = Field(ge=1, le=1_000_000)
+    # 评委 -> 本轮可接任务数；未提供的评委按 0 处理。
+    capacities: dict[str, int] = Field(default_factory=dict)
 
 
 class RuleBody(BaseModel):
@@ -424,6 +432,29 @@ def compare_two_contestants(session_id: str, a: str, b: str) -> dict[str, Any]:
         return compare_contestants(analysis, a, b)
     except (LookupError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/sessions/{session_id}/backfill/preview")
+def backfill_preview(session_id: str, body: BackfillBody) -> dict[str, Any]:
+    """补评分派只读预览：求评委容量与单元缺口约束下的最大分派方案。
+
+    以已有评分的「选手 × 项目」为需求单元，仅允许给该项目打过分、但尚未给
+    该单元打分的评委接单。纯内存计算，**不写入评分或裁决**，不创建/修改会话。
+    """
+    with db.get_conn() as conn:
+        if db.get_scope(conn, session_id) is None:
+            raise HTTPException(status_code=404, detail="会话不存在，请先上传数据。")
+        scope = _resolve_scope(conn, session_id, None)
+        records = db.load_scores(conn, session_id)
+    if not records:
+        raise HTTPException(status_code=404, detail="当前会话没有评分数据，无法生成补评分派方案。")
+    try:
+        plan = plan_backfill(records, body.target, body.capacities)
+    except BackfillValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    plan["scope"] = scope
+    plan["scope_label"] = SCOPE_LABELS[scope]
+    return plan
 
 
 @app.delete("/api/sessions/{session_id}")
