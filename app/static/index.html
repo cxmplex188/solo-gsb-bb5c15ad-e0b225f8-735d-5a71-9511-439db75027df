@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多评委评分校准</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>多评委评分校准</h1>
+  <div class="session-info">
+    <span>会话：<code id="session-id"></code></span>
+    <button id="btn-clear" class="btn btn-ghost" title="清空当前会话的全部数据与裁决">清空会话</button>
+  </div>
+</header>
+
+<main>
+  <!-- 1. 数据导入 -->
+  <section class="card" id="panel-import">
+    <h2>① 数据导入</h2>
+    <p class="hint">
+      CSV 需包含四列：<b>选手</b>、<b>评委</b>、<b>项目</b>、<b>分数</b>（中英文表头均可，如 contestant/judge/item/score）。
+      同一「选手 × 评委 × 项目」仅允许一条分数。
+    </p>
+    <div class="toolbar">
+      <label class="btn btn-primary">
+        上传 CSV（替换导入）
+        <input type="file" id="file-input" accept=".csv,text/csv" hidden>
+      </label>
+      <label class="btn">
+        合并导入（预览差异）
+        <input type="file" id="merge-file-input" accept=".csv,text/csv" hidden>
+      </label>
+      <button id="btn-sample" class="btn">载入示例数据</button>
+      <div class="scope-switch">
+        校准范围：
+        <label><input type="radio" name="scope" value="judge" checked> 按评委（跨项目汇总）</label>
+        <label><input type="radio" name="scope" value="judge_item"> 按评委×项目</label>
+      </div>
+      <span id="import-msg" class="msg"></span>
+    </div>
+    <p class="hint" style="margin-bottom:0;">
+      「上传 CSV」为<b>替换导入</b>：整体替换当前会话的全部评分，并清空旧裁决与批处理规则；
+      「合并导入」会先按「选手 + 评委 + 项目」逐条比对，预览<b>新增、未变、分数变更、仅存在于当前会话</b>四类记录
+      （含新旧分数与将受影响的裁决），确认后才在同一事务落库；取消不改任何数据。
+    </p>
+    <div id="merge-preview"></div>
+  </section>
+
+  <!-- 空状态 -->
+  <section id="empty-state" class="card empty">
+    <p>📄 暂无数据。请上传 CSV 或点击「载入示例数据」开始。</p>
+  </section>
+
+  <div id="dashboard" hidden>
+    <!-- 2. 校准参数与反转 -->
+    <section class="card">
+      <h2>② 稳健标准化与名次反转</h2>
+      <div id="reference-info" class="formula"></div>
+      <div id="stats-row" class="stats"></div>
+      <h3 class="sub">校准分组参数</h3>
+      <div id="group-table-wrap" class="table-wrap"></div>
+      <h3 class="sub">名次反转 <span id="reversal-count" class="badge"></span></h3>
+      <div id="reversal-panel"></div>
+    </section>
+
+    <!-- 3. 排名总表 -->
+    <section class="card">
+      <h2>③ 选手排名（实时）</h2>
+      <div class="toolbar">
+        <button id="btn-reset-decisions" class="btn btn-ghost">全部恢复采用校准分</button>
+        <button id="btn-export" class="btn btn-primary">导出审计 CSV</button>
+      </div>
+      <div id="rank-table-wrap" class="table-wrap"></div>
+    </section>
+
+    <!-- 4. 双选手对比 -->
+    <section class="card">
+      <h2>④ 双选手对比</h2>
+      <p class="hint">
+        从当前数据中选择两名选手，对比<b>原始、校准与最终总分差</b>（A−B）及最终名次，并按项目列出双方得分与差值。
+        逐项目按<b>最终分</b>汇总领先与持平（同时附按原始分、校准分的统计）；某选手在某项目无评分时标为<b>「无数据」</b>，
+        不按零分参与差值或胜负统计。对比由当前评分实时计算，随校准范围或人工裁决变化自动刷新，<b>不另存评分</b>。
+      </p>
+      <div class="toolbar compare-controls">
+        <label>选手 A <select id="compare-a" class="select"></select></label>
+        <span class="compare-vs">VS</span>
+        <label>选手 B <select id="compare-b" class="select"></select></label>
+        <span id="compare-msg" class="msg"></span>
+      </div>
+      <div id="compare-result" class="compare-result"></div>
+    </section>
+
+    <!-- 5. 评委排序分歧 -->
+    <section class="card">
+      <h2>⑤ 评委排序分歧</h2>
+      <p class="hint">
+        按<b>项目 × 评委对</b>分组，仅取两位评委<b>都打过分</b>的选手（共评选手），枚举全部选手对并依<b>原始分</b>归类：
+        <b>同向</b>（双方均非同分、排序方向一致）、<b>逆向</b>（双方均非同分、排序方向相反）、
+        <b>单方同分</b>（恰有一位评委给两名选手同分）、<b>双方同分</b>（两位评委都给同分）。
+        共评选手少于 2 名的分组标为<b>「样本不足」</b>，不给出分歧率；
+        仅<b>双方均非同分</b>（同向、逆向）的选手对计入可比较对数与逆向占比。
+        本面板<b>只读、仅基于原始分</b>，不受校准范围与逐项裁决影响，导入或合并数据后实时刷新；
+        点分组行可展开查看其中<b>逆向选手对的双方原分</b>。
+      </p>
+      <div id="disagreement-panel" class="disagreement-panel"></div>
+    </section>
+
+    <!-- 6. 评分裁决规则批处理 -->
+    <section class="card">
+      <h2>⑥ 评分裁决规则批处理</h2>
+      <p class="hint">
+        按<b>评委、项目、原始分区间、校准分区间</b>组合条件（留空表示不限），批量指定「保留原分 / 采用校准分」与理由模板，
+        并为每条规则指定<b>优先级</b>（数字越小越优先，数字相同按规则顺序前者优先）。
+        先点「预览」查看每条规则的命中数、未命中数、多规则冲突及按优先级裁决后的唯一结果；预览只读，不会保存或改动裁决。
+        确认后点「应用」，系统将在<b>一个事务</b>中保存规则并批量写入裁决，随后自动刷新排名。
+        理由模板支持占位符：<code>{judge}</code> 评委、<code>{item}</code> 项目、<code>{raw}</code> 原始分、<code>{calibrated}</code> 校准分。
+      </p>
+      <div id="rules-editor"></div>
+      <div class="toolbar" style="margin-top:12px;">
+        <button id="btn-rule-add" class="btn">＋ 新增规则</button>
+        <button id="btn-rule-preview" class="btn btn-primary">预览命中与冲突（不保存）</button>
+        <button id="btn-rule-save" class="btn">仅保存规则</button>
+        <button id="btn-rule-apply" class="btn btn-primary">应用：保存规则并批量写入裁决</button>
+        <button id="btn-rule-clear" class="btn btn-ghost-card">清空全部规则</button>
+        <span id="rules-msg" class="msg"></span>
+      </div>
+      <div id="rules-preview" class="rules-preview"></div>
+    </section>
+
+    <!-- 7. 排名稳定性实验 -->
+    <section class="card">
+      <h2>⑦ 排名稳定性实验（临时模拟，不保存）</h2>
+      <p class="hint">
+        选择<b>临时排除一名评委或一个项目</b>，系统按当前校准范围重算原始分、校准分、最终总分与竞赛名次，
+        并逐位展示每位选手相对基线的名次/总分变化及被移除的评分条数。
+        实验结果仅保留在当前页面，<b>不会写入裁决或数据库</b>；上传、切换范围或修改裁决会自动清除实验结果，也可手动恢复基线。
+      </p>
+      <div class="toolbar stability-controls">
+        <select id="stability-type" class="select">
+          <option value="judge">排除评委</option>
+          <option value="item">排除项目</option>
+        </select>
+        <select id="stability-name" class="select"></select>
+        <button id="btn-stability-run" class="btn btn-primary">运行实验</button>
+        <button id="btn-stability-clear" class="btn btn-ghost" disabled>清除结果，恢复基线</button>
+        <span id="stability-msg" class="msg"></span>
+      </div>
+      <div id="stability-result" class="stability-result"></div>
+    </section>
+
+    <!-- 8. 逐项裁决 -->
+    <section class="card">
+      <h2>⑧ 逐项评分裁决</h2>
+      <p class="hint">对每条原始评分选择「采用校准分」或「保留原分」并填写理由，排名将实时重算。</p>
+      <div id="detail-panel"></div>
+    </section>
+  </div>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
