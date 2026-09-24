@@ -21,6 +21,8 @@ let compareReqId = 0; // 丢弃过期的对比响应
 let ruleDraft = null; // 规则编辑器草稿（数组），DOM 是输入中的真实来源
 let rulePreviewData = null; // 最近一次规则预览结果（只读，不落库）
 let rulePreviewStale = false; // 草稿在预览后又被修改
+let supplementCaps = null; // 补评分派：各评委本轮可接任务数草稿（评委名 -> 数量）
+let supplementData = null; // 最近一次补评分派只读预览结果（不落库）
 
 const $ = (sel) => document.querySelector(sel);
 const dashboard = $("#dashboard");
@@ -93,6 +95,7 @@ function render() {
   renderReversals();
   renderRanks();
   renderDisagreement();
+  renderSupplement();
   initRuleDraft();
   renderDetails();
   renderStability();
@@ -633,6 +636,198 @@ function renderDetails() {
     input.addEventListener("input", onReasonInput);
   });
 }
+
+// ---------- 补评分派（只读预览） ----------
+const supplementTargetInput = $("#supplement-target");
+const supplementCapacitiesEl = $("#supplement-capacities");
+const supplementResultEl = $("#supplement-result");
+
+function setSupplementMsg(text, cls = "") {
+  const el = $("#supplement-msg");
+  el.textContent = text;
+  el.className = "msg " + cls;
+}
+
+// 计算每位评委「最多能接多少单」：其评过分的项目中、尚未评过的单元数。
+function supplementMaxCaps(an) {
+  const itemJudges = new Set(); // item|judge
+  const scored = new Set();     // contestant|item|judge
+  for (const b of an.contestants) {
+    for (const ib of b.items) {
+      for (const s of ib.scores) {
+        itemJudges.add(ib.item + "|" + s.judge);
+        scored.add(b.contestant + "|" + ib.item + "|" + s.judge);
+      }
+    }
+  }
+  const caps = {};
+  for (const judge of an.judges) {
+    let n = 0;
+    for (const b of an.contestants) {
+      for (const ib of b.items) {
+        if (itemJudges.has(ib.item + "|" + judge)
+            && !scored.has(b.contestant + "|" + ib.item + "|" + judge)) n += 1;
+      }
+    }
+    caps[judge] = n;
+  }
+  return caps;
+}
+
+// 数据集变化后重置容量草稿与预览结果（在 renderSupplement 中按需初始化）。
+function resetSupplement() {
+  supplementCaps = null;
+  supplementData = null;
+  if (supplementTargetInput) supplementTargetInput.value = "";
+  setSupplementMsg("");
+}
+
+function renderSupplement() {
+  if (!analysis || analysis.counts.scores === 0) return;
+  // 首次进入当前数据集：目标人数默认为评委数，容量默认为各评委可接单元上限。
+  if (supplementCaps === null) {
+    supplementCaps = supplementMaxCaps(analysis);
+    if (!supplementTargetInput.value) {
+      supplementTargetInput.value = String(analysis.judges.length);
+    }
+  }
+  supplementCapacitiesEl.innerHTML =
+    `<div class="supp-cap-grid">` +
+    analysis.judges.map((j) => `
+      <label class="supp-cap-item">
+        <span class="supp-cap-name" title="${esc(j)}">${esc(j)}</span>
+        <span class="supp-cap-label">本轮可接任务数</span>
+        <input type="number" class="supp-cap-input" data-judge="${esc(j)}"
+               min="0" max="1000000" step="1" value="${supplementCaps[j] ?? 0}">
+      </label>`).join("") +
+    `</div>
+     <p class="hint supp-cap-hint">
+       容量默认值＝该评委<b>已评过的项目里、尚未评过的单元数</b>（即可接任务上限），可按需改小或清零。
+     </p>`;
+
+  supplementCapacitiesEl.querySelectorAll(".supp-cap-input").forEach((input) => {
+    input.addEventListener("input", () => {
+      const v = input.value.trim();
+      supplementCaps[input.dataset.judge] = v === "" ? 0 : Number(v);
+      supplementData = null; // 参数变动后旧预览失效
+      renderSupplementResult();
+    });
+  });
+  renderSupplementResult();
+}
+
+function renderSupplementResult() {
+  if (!supplementData) {
+    supplementResultEl.innerHTML = "";
+    return;
+  }
+  const p = supplementData;
+  const s = p.summary;
+
+  const judgeRows = p.judges.map((j) => `
+    <tr>
+      <td>${esc(j.judge)}</td>
+      <td class="num">${j.capacity}</td>
+      <td class="num"><b>${j.assigned_count}</b></td>
+      <td class="num ${j.remaining === 0 ? "delta-flat" : "delta-up"}">${j.remaining}</td>
+    </tr>`).join("");
+
+  const assignRows = p.assignments.map((a) => `
+    <tr class="supp-assign-row">
+      <td>${esc(a.judge)}</td><td>${esc(a.contestant)}</td><td>${esc(a.item)}</td>
+    </tr>`).join("");
+
+  const needUnits = p.units.filter((u) => u.need > 0);
+  const unitRows = needUnits.map((u) => {
+    const cls = u.unmet > 0 ? "supp-unmet" : "supp-met";
+    return `
+    <tr class="${cls}">
+      <td>${esc(u.item)}</td><td>${esc(u.contestant)}</td>
+      <td class="num">${u.existing_count}</td>
+      <td class="num">${u.target}</td>
+      <td class="num">${u.need}</td>
+      <td class="num"><b>${u.assigned}</b></td>
+      <td class="num"><b class="${u.unmet > 0 ? "delta-down" : "delta-flat"}">${u.unmet}</b></td>
+      <td>${u.eligible_judges.length
+        ? u.eligible_judges.map(esc).join("、")
+        : '<span class="dg-no-detail">无可接评委</span>'}</td>
+    </tr>`;
+  }).join("");
+
+  supplementResultEl.innerHTML = `
+    <div class="supp-banner">
+      分派预览（只读，不写入评分或裁决）｜目标每单元 <b>${s.target_judges}</b> 位评委：
+      共 <b>${s.units}</b> 个单元（已有 ${s.already_complete} 个达标），存在缺口的 <b>${s.units_with_need}</b> 个；
+      缺口合计 <b>${s.total_need}</b>，本次可分派 <b class="delta-up">${s.assigned_total}</b> 单
+      （容量合计 ${s.capacity_total}、候选任务 ${s.candidate_edges} 条），
+      未满足缺口合计 <b class="${s.unmet_total > 0 ? "delta-down" : "delta-flat"}">${s.unmet_total}</b>。
+      <span class="supp-banner-note">
+        达标 <b>${s.fully_satisfied}</b> 个单元、部分满足 <b>${s.partially_satisfied}</b> 个、
+        完全未满足 <b>${s.unsatisfied}</b> 个；结果按 评委 → 项目 → 选手 固定顺序稳定给出。
+      </span>
+    </div>
+    <div class="table-wrap supp-units-wrap">
+      <table>
+        <tr><th>项目</th><th>选手</th><th class="num">已有<br>评委数</th><th class="num">目标</th>
+        <th class="num">缺口</th><th class="num">本次分派</th><th class="num">未满足</th><th>本轮可接评委</th></tr>
+        ${unitRows || '<tr><td colspan="8" class="no-reversal">没有存在缺口的单元。</td></tr>'}
+      </table>
+    </div>
+    <details class="supp-assign-details" ${p.assignments.length ? "open" : ""}>
+      <summary>分派任务逐条明细（评委 / 选手 / 项目，共 ${p.assignments.length} 单）</summary>
+      <div class="table-wrap">
+        <table>
+          <tr><th>评委</th><th>选手</th><th>项目</th></tr>
+          ${assignRows || '<tr><td colspan="3" class="no-reversal">当前容量与候选范围内没有可分派的任务。</td></tr>'}
+        </table>
+      </div>
+    </details>
+    <details class="supp-judge-details">
+      <summary>各评委容量使用情况（${p.judges.length} 位）</summary>
+      <div class="table-wrap">
+        <table>
+          <tr><th>评委</th><th class="num">本轮可接</th><th class="num">已分派</th><th class="num">剩余容量</th></tr>
+          ${judgeRows}
+        </table>
+      </div>
+    </details>`;
+}
+
+$("#btn-supplement-run").addEventListener("click", async () => {
+  const targetRaw = supplementTargetInput.value.trim();
+  const target = Number(targetRaw);
+  if (!Number.isInteger(target) || target < 1) {
+    setSupplementMsg("每单元目标评委人数必须是不小于 1 的整数。", "error");
+    return;
+  }
+  const capacities = analysis.judges.map((j) => {
+    const v = supplementCaps[j];
+    return { judge: j, capacity: Number.isInteger(v) ? v : 0 };
+  });
+  if (capacities.some((c) => !Number.isInteger(c.capacity) || c.capacity < 0)) {
+    setSupplementMsg("每位评委的可接任务数必须是非负整数。", "error");
+    return;
+  }
+  setSupplementMsg("正在求最大分派方案…");
+  try {
+    supplementData = await api(`/api/sessions/${SESSION_ID}/supplement/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_judges: target, capacities }),
+    });
+    renderSupplementResult();
+    const s = supplementData.summary;
+    setSupplementMsg(
+      `预览完成：分派 ${s.assigned_total} 单，未满足缺口 ${s.unmet_total}（未写入任何数据）。`,
+      "ok",
+    );
+  } catch (err) {
+    supplementData = null;
+    renderSupplementResult();
+    setSupplementMsg(err.message, "error");
+    toast("补评分派预览失败：" + err.message, true);
+  }
+});
 
 // ---------- Batch adjudication rules ----------
 const rulesEditor = $("#rules-editor");
@@ -1180,6 +1375,7 @@ async function confirmMerge() {
     mergeData = null;
     stability = null;
     rulePreviewData = null;
+    resetSupplement(); // 合并后评分集合已变，补评分派草稿/预览作废
     render();
     renderRulesPreview();
     renderMergePreview();
@@ -1204,12 +1400,14 @@ async function loadAnalysis() {
   try {
     analysis = await api(`/api/sessions/${SESSION_ID}/analysis`);
     stability = null;
+    resetSupplement();
     render();
   } catch (_) {
     analysis = null;
     stability = null;
     ruleDraft = null;
     rulePreviewData = null;
+    resetSupplement();
     render();
   }
 }
@@ -1235,6 +1433,7 @@ $("#file-input").addEventListener("change", async (ev) => {
     stability = null;
     ruleDraft = null;
     rulePreviewData = null;
+    resetSupplement(); // 数据集已替换，补评分派草稿/预览作废
     clearMergePreview(); // 替换导入后旧预览的基线已失效
     render();
     renderRulesPreview();
@@ -1258,6 +1457,7 @@ $("#btn-sample").addEventListener("click", async () => {
     stability = null;
     ruleDraft = null;
     rulePreviewData = null;
+    resetSupplement();
     clearMergePreview();
     render();
     renderRulesPreview();
@@ -1322,6 +1522,7 @@ $("#btn-clear").addEventListener("click", async () => {
     stability = null;
     ruleDraft = null;
     rulePreviewData = null;
+    resetSupplement();
     clearMergePreview();
     render();
     renderRulesPreview();

@@ -466,3 +466,78 @@ tr.dg-detail-row td { background: #fbfcfe; padding: 10px 14px; }
 .dg-pref-a { color: var(--green); font-size: 12px; white-space: nowrap; }
 .dg-pref-b { color: var(--red); font-size: 12px; white-space: nowrap; }
 .dg-foot { margin-top: 8px; margin-bottom: 0; }
+
+/* ---------- 补评分派（只读预览） ---------- */
+.supplement-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.supplement-target-input {
+  width: 96px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.supplement-target-input:focus { outline: 2px solid #c9d9ff; border-color: var(--primary); }
+
+.supplement-capacities { margin-top: 12px; }
+.supp-cap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px 14px;
+}
+.supp-cap-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafbfd;
+  padding: 8px 12px;
+}
+.supp-cap-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.supp-cap-label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.supp-cap-input {
+  grid-column: 1 / -1;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+.supp-cap-input:focus { outline: 2px solid #c9d9ff; border-color: var(--primary); }
+.supp-cap-hint { margin: 8px 0 0; }
+
+.supplement-result { margin-top: 14px; }
+.supp-banner {
+  background: #f5f8ff;
+  border: 1px solid #dbe6ff;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #33455f;
+  margin-bottom: 10px;
+}
+.supp-banner-note { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.supp-units-wrap { margin-bottom: 10px; }
+tr.supp-met td { background: #f4faf6; }
+tr.supp-unmet td { background: #fffaf0; }
+.supp-assign-details, .supp-judge-details { margin-top: 10px; }
+.supp-assign-details summary, .supp-judge-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+tr.supp-assign-row td { background: #f4f8ff; }
+

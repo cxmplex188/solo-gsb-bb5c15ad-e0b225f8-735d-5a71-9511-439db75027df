@@ -11,6 +11,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import database as db
+from .assignment import (
+    AssignmentValidationError,
+    normalize_capacities,
+    normalize_target,
+    plan_supplement_assignments,
+)
 from .csv_io import CSVParseError, build_audit_csv, parse_scores
 from .merge import (
     STATUS_LABELS as MERGE_STATUS_LABELS,
@@ -79,6 +85,18 @@ class DecisionBody(BaseModel):
 class StabilityBody(BaseModel):
     exclude_type: Literal["judge", "item"]
     exclude_name: str = Field(min_length=1, max_length=200)
+
+
+class JudgeCapacityBody(BaseModel):
+    judge: str = Field(min_length=1, max_length=200)
+    capacity: int = Field(ge=0, le=1_000_000)
+
+
+class SupplementBody(BaseModel):
+    # 所有「选手 × 项目」单元统一的目标评委人数（扣除已有评分后得到缺口）。
+    target_judges: int = Field(ge=1, le=1_000_000)
+    # 每位评委本轮可接任务数，需覆盖会话中出现过的全部评委。
+    capacities: list[JudgeCapacityBody] = Field(min_length=1)
 
 
 class RuleBody(BaseModel):
@@ -402,6 +420,37 @@ def stability_check(session_id: str, body: StabilityBody) -> dict[str, Any]:
             records, decisions, scope, body.exclude_type, body.exclude_name.strip()
         )
     except LookupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/sessions/{session_id}/supplement/preview")
+def supplement_preview(session_id: str, body: SupplementBody) -> dict[str, Any]:
+    """补评分派：只读预览最大任务分派方案。
+
+    需求单元为当前会话中已有评分的「选手 × 项目」组合；每单元统一目标评委
+    人数（扣除已有评分后为缺口），各评委分别限制本轮容量，只有评过该项目
+    但尚未评该单元的评委可以接单。在这些约束下求分派任务总数最大的方案，
+    并按固定的评委、项目、选手顺序稳定输出并列结果。
+
+    纯只读计算：不写入评分、不产生裁决，也不改变任何会话状态。
+    """
+    try:
+        target = normalize_target(body.target_judges)
+    except AssignmentValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    with db.get_conn() as conn:
+        if db.get_scope(conn, session_id) is None:
+            raise HTTPException(status_code=404, detail="会话不存在，请先上传数据。")
+        records = db.load_scores(conn, session_id)
+        judges = list(dict.fromkeys(r["judge"] for r in records))
+    if not records:
+        raise HTTPException(status_code=404, detail="当前会话没有评分数据，无法分派补评任务。")
+    try:
+        capacities = normalize_capacities(
+            [c.model_dump() for c in body.capacities], judges
+        )
+        return plan_supplement_assignments(records, target, capacities)
+    except AssignmentValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 

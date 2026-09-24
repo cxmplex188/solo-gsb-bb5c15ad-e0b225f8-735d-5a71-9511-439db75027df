@@ -107,9 +107,31 @@
       <div id="disagreement-panel" class="disagreement-panel"></div>
     </section>
 
-    <!-- 6. 评分裁决规则批处理 -->
+    <!-- 6. 补评分派 -->
     <section class="card">
-      <h2>⑥ 评分裁决规则批处理</h2>
+      <h2>⑥ 补评分派（只读预览，不写评分/裁决）</h2>
+      <p class="hint">
+        以当前会话中<b>已有评分的「选手 × 项目」组合为需求单元</b>。统一设定<b>每单元目标评委人数</b>
+        （扣除该单元已有评分后即为缺口），并分别设定<b>各评委本轮可接任务数</b>。
+        只有<b>已给该项目打过分、但尚未给该单元打分</b>的评委才能接单；系统在评委容量与每单元缺口约束下
+        求<b>分派任务总数最大</b>的方案，并列结果按固定的<b>评委 → 项目 → 选手</b>顺序稳定给出。
+        预览逐条列出「评委 / 选手 / 项目」，并汇总各单元未满足数量；<b>全程只读，不会写入任何评分或裁决</b>。
+      </p>
+      <div class="toolbar supplement-controls">
+        <label>每单元目标评委人数
+          <input type="number" id="supplement-target" class="supplement-target-input"
+                 min="1" max="1000000" step="1">
+        </label>
+        <button id="btn-supplement-run" class="btn btn-primary">生成分派预览（只读）</button>
+        <span id="supplement-msg" class="msg"></span>
+      </div>
+      <div id="supplement-capacities" class="supplement-capacities"></div>
+      <div id="supplement-result" class="supplement-result"></div>
+    </section>
+
+    <!-- 7. 评分裁决规则批处理 -->
+    <section class="card">
+      <h2>⑦ 评分裁决规则批处理</h2>
       <p class="hint">
         按<b>评委、项目、原始分区间、校准分区间</b>组合条件（留空表示不限），批量指定「保留原分 / 采用校准分」与理由模板，
         并为每条规则指定<b>优先级</b>（数字越小越优先，数字相同按规则顺序前者优先）。
@@ -129,9 +151,9 @@
       <div id="rules-preview" class="rules-preview"></div>
     </section>
 
-    <!-- 7. 排名稳定性实验 -->
+    <!-- 8. 排名稳定性实验 -->
     <section class="card">
-      <h2>⑦ 排名稳定性实验（临时模拟，不保存）</h2>
+      <h2>⑧ 排名稳定性实验（临时模拟，不保存）</h2>
       <p class="hint">
         选择<b>临时排除一名评委或一个项目</b>，系统按当前校准范围重算原始分、校准分、最终总分与竞赛名次，
         并逐位展示每位选手相对基线的名次/总分变化及被移除的评分条数。
@@ -150,9 +172,9 @@
       <div id="stability-result" class="stability-result"></div>
     </section>
 
-    <!-- 8. 逐项裁决 -->
+    <!-- 9. 逐项裁决 -->
     <section class="card">
-      <h2>⑧ 逐项评分裁决</h2>
+      <h2>⑨ 逐项评分裁决</h2>
       <p class="hint">对每条原始评分选择「采用校准分」或「保留原分」并填写理由，排名将实时重算。</p>
       <div id="detail-panel"></div>
     </section>

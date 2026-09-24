@@ -512,6 +512,122 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(g["comparable_pairs"], 0)
         self.assertIsNone(g["discordance_rate"])
 
+    def test_24_supplement_preview(self):
+        # 项目 P1 评委 JA/JB/JC：X 有 JA，Y 有 JB。
+        csv_body = (
+            "选手,评委,项目,分数\n"
+            "X,JA,P1,8\nY,JB,P1,7\n"          # 两个单元各 1 名评委
+            "W,JC,P1,9\n"                     # JC 也算评过 P1（W 为第三个单元）
+            "X,JA,P2,6\n"                     # P2 仅 JA 评过 -> P2 无可补评委
+        )
+        client.post(
+            f"/api/sessions/{SID}/upload?scope=judge",
+            files={"file": ("s.csv", csv_body.encode("utf-8-sig"), "text/csv")},
+        )
+        # 目标 3：X、Y、W 各缺 2（P2 的 X 缺 2 但无候选评委）。
+        payload = {
+            "target_judges": 3,
+            "capacities": [
+                {"judge": "JA", "capacity": 1},
+                {"judge": "JB", "capacity": 1},
+                {"judge": "JC", "capacity": 1},
+            ],
+        }
+        r = client.post(f"/api/sessions/{SID}/supplement/preview", json=payload)
+        self.assertEqual(r.status_code, 200, r.text)
+        p = r.json()
+        # 4 个单元（X×P1, Y×P1, W×P1, X×P2），全部有缺口。
+        self.assertEqual(p["summary"]["units"], 4)
+        self.assertEqual(p["summary"]["already_complete"], 0)
+        # 最大分派 = 3（P1 三评委各接 1 单），P2 与其余缺口未满足。
+        self.assertEqual(p["summary"]["assigned_total"], 3)
+        self.assertEqual(p["summary"]["max_possible"], 3)
+        # 稳定顺序：评委 → 项目(P1<P2) → 选手(W<X<Y)。
+        self.assertEqual(
+            [(a["judge"], a["item"], a["contestant"]) for a in p["assignments"]],
+            [("JA", "P1", "Y"), ("JB", "P1", "X"), ("JC", "P1", "X")],
+        )
+        unit = {(u["item"], u["contestant"]): u for u in p["units"]}
+        self.assertEqual(unit[("P1", "X")]["assigned"], 2)
+        self.assertEqual(unit[("P1", "X")]["unmet"], 0)
+        self.assertEqual(unit[("P1", "Y")]["unmet"], 1)
+        self.assertEqual(unit[("P2", "X")]["assigned"], 0)
+        self.assertEqual(unit[("P2", "X")]["unmet"], 2)
+        # 评委容量使用情况。
+        judges = {j["judge"]: j for j in p["judges"]}
+        self.assertEqual(judges["JA"]["assigned_count"], 1)
+        self.assertEqual(judges["JA"]["remaining"], 0)
+        # P2 单元的可接评委为空（P2 只有 JA 评过，而 JA 已评过该单元）。
+        self.assertEqual(unit[("P2", "X")]["eligible_judges"], [])
+
+        # 完全达标：目标设为已有评委数能满足的情形（目标 1 时全部达标）。
+        r2 = client.post(
+            f"/api/sessions/{SID}/supplement/preview",
+            json={"target_judges": 1,
+                  "capacities": [{"judge": j, "capacity": 0} for j in ("JA", "JB", "JC")]},
+        )
+        self.assertEqual(r2.json()["summary"]["assigned_total"], 0)
+        self.assertEqual(r2.json()["summary"]["already_complete"], 4)
+
+    def test_25_supplement_preview_readonly_and_validation(self):
+        # 只读：连续调用不改变评分/裁决数量。
+        before = client.get(f"/api/sessions/{SID}/analysis").json()["counts"]["scores"]
+        payload = {"target_judges": 2,
+                   "capacities": [{"judge": "JA", "capacity": 5},
+                                  {"judge": "JB", "capacity": 5},
+                                  {"judge": "JC", "capacity": 5}]}
+        for _ in range(2):
+            r = client.post(f"/api/sessions/{SID}/supplement/preview", json=payload)
+            self.assertEqual(r.status_code, 200)
+        after = client.get(f"/api/sessions/{SID}/analysis").json()["counts"]["scores"]
+        self.assertEqual(before, after)
+
+        # 目标人数 < 1 -> 422（pydantic）。
+        r = client.post(
+            f"/api/sessions/{SID}/supplement/preview",
+            json={"target_judges": 0, "capacities": payload["capacities"]},
+        )
+        self.assertEqual(r.status_code, 422)
+        # 引用不存在的评委 -> 400。
+        r = client.post(
+            f"/api/sessions/{SID}/supplement/preview",
+            json={"target_judges": 2,
+                  "capacities": [{"judge": "ZZ", "capacity": 1},
+                                 {"judge": "JB", "capacity": 1},
+                                 {"judge": "JC", "capacity": 1}]},
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("评委", r.json()["detail"])
+        # 容量表漏掉评委 -> 400。
+        r = client.post(
+            f"/api/sessions/{SID}/supplement/preview",
+            json={"target_judges": 2,
+                  "capacities": [{"judge": "JA", "capacity": 1}]},
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("未设置", r.json()["detail"])
+        # 容量为负 -> 422（pydantic）。
+        r = client.post(
+            f"/api/sessions/{SID}/supplement/preview",
+            json={"target_judges": 2,
+                  "capacities": [{"judge": "JA", "capacity": -1},
+                                 {"judge": "JB", "capacity": 1},
+                                 {"judge": "JC", "capacity": 1}]},
+        )
+        self.assertEqual(r.status_code, 422)
+        # 未知会话 -> 404。
+        r = client.post("/api/sessions/no-such/supplement/preview", json=payload)
+        self.assertEqual(r.status_code, 404)
+
+    def test_26_supplement_empty_session_404(self):
+        client.delete(f"/api/sessions/{SID}")
+        r = client.post(
+            f"/api/sessions/{SID}/supplement/preview",
+            json={"target_judges": 2,
+                  "capacities": [{"judge": "JA", "capacity": 1}]},
+        )
+        self.assertEqual(r.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
